@@ -1,41 +1,77 @@
-language: python
+language: minimal
 os:
   - linux
 sudo: false
 env:
   matrix:
+    # define own python versions because we are using conda
     - PYTHON_VERSION="2.7"
+      TASKING="--enable-tasking"
+      CUDA="--disable-cuda"
     - PYTHON_VERSION="3.6"
+      TASKING="--enable-tasking"
+      CUDA="--disable-cuda"
+    - PYTHON_VERSION="3.6"
+      TASKING="--disable-tasking"
+      CUDA="--disable-cuda"
     - PYTHON_VERSION="3.7"
+      TASKING="--enable-tasking"
+      CUDA="--disable-cuda"
+    - PYTHON_VERSION="3.7"
+      TASKING="--enable-tasking"
+      CUDA="--enable-cuda"
   global:
+    - CUDA_INSTALLER=cuda_10.1.168_418.67_linux.run
+    - CUDA_TOOLKIT_ROOT_DIR=${HOME}/cuda
+    - CUDA_COMPILER=${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc
+    - LD_LIBRARY_PATH=${HOME}/miniconda/lib:${CUDA_TOOLKIT_ROOT_DIR}/lib64
     - PATH=${HOME}/miniconda/bin:${PATH}
-    - LD_LIBRARY_PATH=${HOME}/miniconda/lib
-    - PYCTEST_ARGS='--pyctest-submit --pyctest-jobs=1 --pyctest-site=Travis'
+    - PYCTEST_ARGS="-SF --pyctest-jobs=1 --pyctest-site=Travis
+      --phantoms baboon checkerboard peppers -- -VV --
+      -DCUDA_TOOLKIT_ROOT_DIR=${CUDA_TOOLKIT_ROOT_DIR}
+      -DCMAKE_CUDA_COMPILER=${CUDA_COMPILER}"
+    - TOMOPY_USE_C_ALGORITHMS=1
 before_install:
+  # Install miniconda
   - if [[ "$PYTHON_VERSION" == "2.7" ]]; then
       wget https://repo.continuum.io/miniconda/Miniconda2-latest-Linux-x86_64.sh -O miniconda.sh;
     else
       wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
     fi
   - bash miniconda.sh -b -p ${HOME}/miniconda
-  - export PATH="${HOME}/miniconda/bin:${PATH}"
-  - conda config --set always_yes yes
-install:
-  - conda config --add channels jrmadsen
-  - conda config --add channels conda-forge
+  - source ${HOME}/miniconda/etc/profile.d/conda.sh
+  - conda activate
   - >
-      conda install python=$PYTHON_VERSION
-      --file envs/requirements-all.txt
-      --file envs/requirements-unix-build.txt
-      --file envs/requirements-bench.txt
-  - if [[ "$PYTHON_VERSION" == "2.7" ]]; then
-      conda install python-coveralls --file envs/requirements-py27.txt;
-    fi
+    conda config
+    --set always_yes yes
+    --set changeps1 no
+    --set auto_update_conda no
+  - conda update -n base conda
+install:
+  # Install python dependencies using conda
+  - PYTHON_TAG=$(echo ${PYTHON_VERSION} | sed 's/\.//g')
+  - conda env create -n tomopy -f envs/linux-${PYTHON_TAG}.yml
+  - conda activate tomopy
   - conda info -a
   - conda list --explicit
-  - ./pyctest_tomopy.py --disable-phantom-tests ${PYCTEST_ARGS}
+  # Install the CUDA toolkit seconds so CUDA can find host compilers
+  - ln -s ${CC} ${CONDA_PREFIX}/bin/gcc
+  - ln -s ${CXX} ${CONDA_PREFIX}/bin/g++
+  - if [[ "$CUDA" == "--enable-cuda" ]]; then
+      wget -N https://developer.nvidia.com/compute/cuda/10.1/Prod/local_installers/${CUDA_INSTALLER};
+      chmod u+x ${CUDA_INSTALLER};
+      ./${CUDA_INSTALLER} --silent --toolkit
+      --toolkitpath=${CUDA_TOOLKIT_ROOT_DIR}
+      --defaultroot=${CUDA_TOOLKIT_ROOT_DIR}
+      --no-opengl-libs --no-man-page --no-drm;
+    fi
+  # Check the compilers
+  - which gcc
+  - which g++
+  - echo "C compiler = ${CC}"
+  - echo "CXX compiler = ${CXX}"
 script:
-  - cd test/
-  - coverage run $(which nosetests)
+  - ./pyctest_tomopy.py ${TASKING} ${CUDA} --phantom-size 128 ${PYCTEST_ARGS}
+  - $(which nosetests)
 after_success:
   - coveralls
