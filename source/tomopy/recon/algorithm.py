@@ -53,16 +53,17 @@ Module for reconstruction algorithms.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
-import os
-import six
+import concurrent.futures as cf
 import copy
+import logging
+import os
+
 import numpy as np
+
+from tomopy.sim.project import get_center
 import tomopy.util.mproc as mproc
 import tomopy.util.extern as extern
 import tomopy.util.dtype as dtype
-from tomopy.sim.project import get_center
-import logging
-import concurrent.futures as cf
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ allowed_recon_kwargs = {
     'sirt': ['num_gridx', 'num_gridy', 'num_iter'],
     'tv': ['num_gridx', 'num_gridy', 'num_iter', 'reg_par'],
     'grad': ['num_gridx', 'num_gridy', 'num_iter', 'reg_par'],
+    'tikh': ['num_gridx', 'num_gridy', 'num_iter', 'reg_data', 'reg_par'],
 }
 
 
@@ -150,7 +152,9 @@ def recon(
             Total Variation reconstruction technique
             :cite:`Chambolle:11`.
         'grad'
-            Gradient descent method with a constant step size
+            Gradient descent method.
+        'tikh'
+            Tikhonov regularization with identity Tikhonov matrix.
 
     num_gridx, num_gridy : int, optional
         Number of pixels along x- and y-axes in the reconstruction grid.
@@ -254,7 +258,7 @@ def recon(
     # Generate kwargs for the algorithm.
     kwargs_defaults = _get_algorithm_kwargs(tomo.shape)
 
-    if isinstance(algorithm, six.string_types):
+    if isinstance(algorithm, str):
 
         allowed_kwargs = copy.copy(allowed_recon_kwargs)
         if algorithm in allowed_accelerated_kwargs:
@@ -274,11 +278,12 @@ def recon(
                     (key, allowed_kwargs[algorithm]))
             else:
                 # Make sure they are numpy arrays.
-                if not isinstance(kwargs[key], (np.ndarray, np.generic)) and not isinstance(kwargs[key], six.string_types):
+                if (not isinstance(kwargs[key], (np.ndarray, np.generic))
+                        and not isinstance(kwargs[key], str)):
                     kwargs[key] = np.array(value)
 
                 # Make sure reg_par and filter_par is float32.
-                if key == 'reg_par' or key == 'filter_par':
+                if key == 'reg_par' or key == 'filter_par' or key == 'reg_data':
                     if not isinstance(kwargs[key], np.float32):
                         kwargs[key] = np.array(value, dtype='float32')
 
@@ -416,6 +421,7 @@ def _get_algorithm_kwargs(shape):
         'filter_par': np.array([0.5, 8], dtype='float32'),
         'num_iter': dtype.as_int32(1),
         'reg_par': np.ones(10, dtype='float32'),
+        'reg_data': np.zeros([dy,dx,dx], dtype='float32'),
         'num_block': dtype.as_int32(1),
         'ind_block': np.arange(0, dt, dtype=np.float32),  # TODO: I think this should be int
         'options': {},
